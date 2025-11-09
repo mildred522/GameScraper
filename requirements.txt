@@ -1,0 +1,7 @@
+customtkinter
+pillow
+selenium
+webdriver-manager
+selenium-stealth
+requests
+translators
