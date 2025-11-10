@@ -11,6 +11,8 @@ from io import BytesIO
 import re
 import json
 import translators as ts  # --- ★★★ 翻译库 ★★★ ---
+import webbrowser       # --- ★★★ 浏览器模块 ★★★ ---
+import urllib.parse     # --- ★★★ 新增：用于Bilibili URL编码 ★★★ ---
 
 # --- 爬虫相关导入 ---
 try:
@@ -36,6 +38,24 @@ IS_SCRAPING = False
 APP_BG_COLOR = ["#FFFFFF", "#1B1B1B"]
 CARD_BG_COLOR = ["#F7F7F7", "#242424"]
 TRANSLATION_CACHE = {}  # --- ★★★ 翻译缓存 ★★★ ---
+
+# --- 跳转点击函数 ---
+def on_redirect_click(url):
+    """
+    在用户的默认浏览器中打开指定的 URL。
+    """
+    print(f"[Redirect] Click event received for URL: {url}")
+    
+    if url:
+        print(f"[Redirect] 正在打开: {url}")
+        try:
+            webbrowser.open_new_tab(url)
+        except Exception as e:
+            print(f"[Redirect] 打开 URL 失败: {e}")
+            messagebox.showerror("打开失败", f"无法打开链接：\n{e}")
+    else:
+        print("[Redirect] 警告：此条目没有 URL (url is None or empty)。")
+        messagebox.showwarning("无链接", "抱歉，未能找到此游戏的有效链接。")
 
 # --- 爬虫驱动程序管理 (使用 Stealth) ---
 def get_driver(headless=False):
@@ -92,7 +112,7 @@ def close_driver():
         except Exception as e:
             print(f"[DEBUG] 关闭 WebDriver 时出错: {e}")
 
-# --- 爬虫 1: TapTap (已验证) ---
+# --- ★★★ 修正：爬虫 1: TapTap (恢复并修复URL) ★★★ ---
 def scrape_taptap_data(driver):
     if not driver: return []
     data = []
@@ -105,6 +125,7 @@ def scrape_taptap_data(driver):
         wait = WebDriverWait(driver, 20)
         
         try:
+            # ★★★ 恢复：使用您原来的选择器 ★★★
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.game-list-cell")))
             print("[DEBUG] (TapTap) 页面加载成功，模拟滚动 2 次...")
             for _ in range(2):
@@ -117,20 +138,38 @@ def scrape_taptap_data(driver):
             return []
         
         print("[DEBUG] (TapTap) 正在解析...")
+        # ★★★ 恢复：使用您原来的选择器 ★★★
         game_cards = driver.find_elements(By.CSS_SELECTOR, "div.game-list-cell")
 
         for card in game_cards:
             try:
                 game_name = card.find_element(By.CSS_SELECTOR, "div.app-title span.text").text
                 icon_url = card.find_element(By.CSS_SELECTOR, "img.app-icon__img").get_attribute("src")
+                
+                # --- ★★★ 核心修正：基于您的HTML，链接在卡片内部的 <a> 标签 ★★★ ---
+                game_url = None
+                try:
+                    # 找到包裹图标的 <a> (class="tap-router inline-flex game-cell__icon")
+                    link_element = card.find_element(By.CSS_SELECTOR, "a.game-cell__icon")
+                    game_url = link_element.get_attribute("href")
+                    # (TapTap 的 href 是相对路径, e.g., /app/386208)
+                    if game_url and game_url.startswith("/"):
+                        game_url = "https://www.taptap.cn" + game_url
+                except Exception as e_url:
+                    print(f"[DEBUG] (TapTap) 抓取 URL 失败 (可能是广告卡片): {e_url}")
+                # --- ★★★ 修正结束 ★★★ ---
+                
                 tag_texts = set() 
                 release_info = "未知"
                 try:
                     release_date_element = card.find_element(By.CSS_SELECTOR, "div.app-row-card__hint")
                     release_info = release_date_element.text
                 except NoSuchElementException:
-                    tags = card.find_elements(By.CSS_SELECTOR, "div.game-cell__tags a")
-                    tag_texts = {tag.text for tag in tags} 
+                    try:
+                        tags = card.find_elements(By.CSS_SELECTOR, "div.game-cell__tags a")
+                        tag_texts = {tag.text for tag in tags} 
+                    except NoSuchElementException:
+                        pass # 没标签也没关系
 
                 if not MY_KEYWORDS.isdisjoint(tag_texts):
                     data.append({
@@ -138,7 +177,8 @@ def scrape_taptap_data(driver):
                         "icon_url": icon_url,
                         "release": release_info,
                         "tags": list(tag_texts), 
-                        "source": "TapTap"
+                        "source": "TapTap",
+                        "game_url": game_url 
                     })
             except Exception as e:
                 print(f"[DEBUG] (TapTap) 解析一张卡片时出错: {e}")
@@ -148,7 +188,7 @@ def scrape_taptap_data(driver):
         traceback.print_exc()
     return data
 
-# --- 爬虫 2: Bilibili (已验证) ---
+# --- ★★★ 修正：爬虫 2: Bilibili (构建搜索URL) ★★★ ---
 def scrape_bilibili_data(driver):
     if not driver: return []
     data = []
@@ -180,6 +220,16 @@ def scrape_bilibili_data(driver):
             try:
                 game_name = card.find_element(By.CSS_SELECTOR, "h1[class*='content_title']").text.strip()
                 icon_url = card.find_element(By.CSS_SELECTOR, "img[class*='logo_icon']").get_attribute("src")
+                
+                # --- ★★★ 核心修正：无法抓取，改为构建搜索 URL (使用您提供的正确 URL) ★★★ ---
+                game_url = None
+                try:
+                    # 使用您提供的正确搜索 URL
+                    game_url = f"https://game.bilibili.com/platform/search/?keyword={urllib.parse.quote(game_name)}"
+                except Exception as e_url:
+                     print(f"[DEBUG] (Bili) 构建 URL 失败: {e_url}")
+                # --- ★★★ 修正结束 ★★★ ---
+                
                 tags_elements = card.find_elements(By.CSS_SELECTOR, "div[class*='tagGroup'] > span[class*='tag']")
                 tag_texts = {tag.text for tag in tags_elements if tag.text} 
                 release_info = "预约中"
@@ -190,7 +240,8 @@ def scrape_bilibili_data(driver):
                         "icon_url": icon_url,
                         "release": release_info,
                         "tags": list(tag_texts), 
-                        "source": "Bilibili"
+                        "source": "Bilibili",
+                        "game_url": game_url 
                     })
             except Exception as e:
                 print(f"[DEBUG] (Bilibili) 解析一张卡片时出错: {e}")
@@ -202,7 +253,7 @@ def scrape_bilibili_data(driver):
             root.after(0, lambda: status_label.configure(text="爬取B站失败！(详见命令行)", text_color="red"))
     return data
 
-# --- 爬虫 3: QooApp (JSON 过滤版) ---
+# --- ★★★ 修正：爬虫 3: QooApp (通过ID构建URL) ★★★ ---
 def scrape_qooapp_data(driver):
     if not driver: return []
     data = []
@@ -238,13 +289,25 @@ def scrape_qooapp_data(driver):
 
                 if game_tags.isdisjoint(ACG_TAGS):
                     continue
+                    
+                # --- ★★★ 核心修正：从 JSON 获取 ID 并构建 URL ★★★ ---
+                game_url = None
+                try:
+                    game_id = game.get("id")
+                    if game_id:
+                        # 基于您HTML中的 <a href="/en-US/app/146773"...> 结构
+                        game_url = f"https://m-apps.qoo-app.com/en-US/app/{game_id}"
+                except Exception:
+                    pass
+                # --- ★★★ 修正结束 ★★★ ---
 
                 data.append({
                     "name": game_name,
                     "icon_url": icon_url,
                     "release": "Pre-register",
                     "tags": game.get("gameType", []),
-                    "source": "QooApp"
+                    "source": "QooApp",
+                    "game_url": game_url 
                 })
             except Exception as e:
                 print(f"[DEBUG] (QooApp) 解析一个 JSON 条目时出错: {e}")
@@ -257,11 +320,11 @@ def scrape_qooapp_data(driver):
             root.after(0, lambda: status_label.configure(text="爬取QooApp失败！(详见命令行)", text_color="red"))
     return data
 
-# --- 爬虫 4: Google Play (最终版) ---
+# --- 爬虫 4: Google Play (最终版 - 已验证) ---
 def scrape_google_play_data(driver):
     if not driver: return []
     data = []
-    url = "https://play.google.com/store/search?q=anime%20game%20pre-registration&c=apps&gl=us&hl=en"
+    url = "https://play.google.com/store/search?q=anime%20role%20playing%20pre-registration&c=apps&gl=us&hl=en"
     
     try:
         print(f"[DEBUG] (Google Play) 正在打开 {url} ...")
@@ -331,6 +394,16 @@ def scrape_google_play_data(driver):
                 
                 if "googleusercontent.com/profile/picture" in icon_url:
                     continue
+                    
+                game_url = None
+                try:
+                    # 获取 URL
+                    link_tag = card.find_element(By.TAG_NAME, "a")
+                    game_url = link_tag.get_attribute("href")
+                    if game_url.startswith("/"):
+                        game_url = "https://play.google.com" + game_url
+                except Exception:
+                    pass
 
                 parsed_games.add(game_name) 
                 
@@ -338,8 +411,9 @@ def scrape_google_play_data(driver):
                     "name": game_name,
                     "icon_url": icon_url,
                     "release": "Pre-registration (GP)", 
-                    "tags": ["Google Play", "Anime", "Pre-registration"], 
-                    "source": "Google Play"
+                    "tags": ["Google Play", "Anime", "RPG", "Pre-registration"], 
+                    "source": "Google Play",
+                    "game_url": game_url 
                 })
             except Exception as e:
                 pass 
@@ -360,31 +434,19 @@ def scrape_google_play_data(driver):
 
 # --- 异步翻译 ---
 def translate_async(text, name_label):
-    """
-    在后台线程中翻译文本，然后更新 UI 上的 CTkLabel
-    """
     global TRANSLATION_CACHE
-
-    # 1. 检查缓存
     if text in TRANSLATION_CACHE:
         translated_text = TRANSLATION_CACHE[text]
         if root:
             root.after(0, lambda: update_label_with_translation(name_label, translated_text, is_from_cache=True))
         return
-
-    # 2. 翻译 (这是一个网络 IO 操作)
     try:
         print(f"[Translate] 正在翻译: {text}")
         translated_text = ts.translate_text(text, to_language='zh-CN', translator='google')
         print(f"[Translate] 成功: {text} -> {translated_text}")
-        
-        # 3. 存入缓存
         TRANSLATION_CACHE[text] = translated_text
-        
-        # 4. 更新 UI
         if root:
             root.after(0, lambda: update_label_with_translation(name_label, translated_text))
-            
     except Exception as e:
         print(f"[Translate] 翻译失败 {text}: {e}")
         TRANSLATION_CACHE[text] = text
@@ -393,52 +455,32 @@ def translate_async(text, name_label):
 
 # --- 用于更新UI和状态的辅助函数 ---
 def update_label_with_translation(name_label, translated_text, is_from_cache=False, is_failure=False):
-    """
-    在主线程中安全地更新标签文本和附加的状态属性
-    """
     try:
         if is_failure:
-            # 翻译失败，保持原文
             name_label.translated_name = name_label.original_name
             name_label.is_translated = False
         else:
-            # 翻译成功
             name_label.configure(text=f"✨ {translated_text}")
             name_label.translated_name = translated_text
             name_label.is_translated = True
-            
         if is_from_cache and not is_failure:
              print(f"[Translate] 使用缓存: {name_label.original_name} -> {translated_text}")
-
     except Exception as e:
         print(f"[UpdateLabelError] 更新标签失败: {e}")
 
-# --- ★★★ 核心修正 1：修改点击事件处理程序 ★★★ ---
+# --- 标签点击事件处理程序 ---
 def on_name_label_click(event, label):
-    """
-    处理点击游戏名称标签的事件，用于切换原文和译文。
-    'label' 是我们通过 lambda 传入的正确的 CTkLabel 对象。
-    """
-    # 'label = event.widget' <--- 这一行不再需要，因为 label 是直接传入的
-    
-    # 检查标签是否具有我们需要的自定义属性
     if not hasattr(label, "is_translated") or not hasattr(label, "original_name"):
-        # 理论上不应该发生，因为我们只给可翻译的标签绑定了
         return
-
     try:
         if label.is_translated:
-            # --- 当前显示的是译文，切换回原文 ---
             label.configure(text=f"✨ {label.original_name}")
             label.is_translated = False
         else:
-            # --- 当前显示的是原文，切换回译文 ---
-            # 检查译文是否已准备好
             if label.translated_name:
                 label.configure(text=f"✨ {label.translated_name}")
                 label.is_translated = True
             else:
-                # 这种情况很少见，意味着用户在翻译完成前点击了
                 print("[DEBUG] 切换失败，翻译尚未完成。")
                 pass
     except Exception as e:
@@ -493,7 +535,7 @@ def create_main_window():
     print("[DEBUG] 3. 主窗口创建完毕。")
     return root
 
-# --- UI 列表 (绑定点击事件) ---
+# --- UI 列表 (添加跳转按钮) ---
 def populate_game_list(container, game_data):
     print(f"[DEBUG] 5. 正在填充数据 (共 {len(game_data)} 条)...")
     for widget in container.winfo_children():
@@ -524,8 +566,11 @@ def populate_game_list(container, game_data):
 
         info_frame = ctk.CTkFrame(master=card_frame, fg_color="transparent")
         info_frame.grid(row=0, column=1, rowspan=3, sticky="nsew", padx=(0, 15), pady=10)
-        info_frame.grid_columnconfigure(0, weight=1)
-        info_frame.grid_columnconfigure(1, weight=0)
+        
+        info_frame.grid_columnconfigure(0, weight=1) # 游戏名 (占满)
+        info_frame.grid_columnconfigure(1, weight=0) # 来源 (自动)
+        info_frame.grid_columnconfigure(2, weight=0) # 新按钮 (自动)
+        
         info_frame.grid_rowconfigure(2, weight=1)
 
         icon_url = game.get("icon_url")
@@ -544,7 +589,7 @@ def populate_game_list(container, game_data):
         name_label = ctk.CTkLabel(master=info_frame, text=display_name,
                                   font=ctk.CTkFont(family="PingFang SC", size=16, weight="bold"),
                                   text_color=name_color, anchor="w",
-                                  cursor="hand2") # hand2 是点击手势
+                                  cursor="hand2")
         name_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
         # --- 为切换功能附加状态 ---
@@ -552,18 +597,13 @@ def populate_game_list(container, game_data):
         name_label.translated_name = None 
         name_label.is_translated = False 
         
-        # 只有 QooApp 和 Google Play 才绑定切换事件
         if game['source'] in ('QooApp', 'Google Play'):
-            # --- ★★★ 核心修正 2：使用 lambda 绑定 ★★★ ---
-            # 我们传递 event (自动) 和 lbl=name_label (手动)
             name_label.bind("<Button-1>", lambda event, lbl=name_label: on_name_label_click(event, lbl))
             
-            # 检查缓存
             if game_name in TRANSLATION_CACHE:
                 translated = TRANSLATION_CACHE[game_name]
                 update_label_with_translation(name_label, translated, is_from_cache=True)
             else:
-                # 启动后台线程翻译
                 threading.Thread(target=translate_async, args=(game_name, name_label), daemon=True).start()
         
         source = game.get("source", "")
@@ -578,6 +618,28 @@ def populate_game_list(container, game_data):
         source_label = ctk.CTkLabel(master=info_frame, text=source, font=ctk.CTkFont(family="PingFang SC", size=10, weight="bold"), text_color=source_color, anchor="e")
         source_label.grid(row=0, column=1, sticky="ne", padx=(5, 0), pady=(2, 0))
 
+        # --- ★★★ 添加跳转按钮 (并修复禁用状态的显示) ★★★ ---
+        game_url = game.get("game_url") 
+
+        link_button = ctk.CTkButton(
+            master=info_frame,
+            text="🔗", 
+            width=20,
+            height=20,
+            font=ctk.CTkFont(size=14),
+            fg_color="transparent",
+            hover_color=["#E0E0E0", "#333333"],
+            text_color=["#555555", "#AAAAAA"],
+            command=lambda url=game_url: on_redirect_click(url) 
+        )
+        link_button.grid(row=0, column=2, sticky="ne", padx=(2, 0), pady=(0, 0))
+        
+        # ★★★ 核心修正：添加“禁用”状态的视觉提示 ★★★
+        if not game_url:
+            link_button.configure(state="disabled")
+            link_button.configure(text="❌", text_color="gray")
+        # --- ★★★ 修正结束 ★★★ ---
+            
         release_info = game["release"].strip()
         release_color = ["#666666", "#AAAAAA"]
 
@@ -589,12 +651,12 @@ def populate_game_list(container, game_data):
             release_color = ["#28a745", "#50C878"]
 
         release_label = ctk.CTkLabel(master=info_frame, text=release_info, font=ctk.CTkFont(family="PingFang SC", size=12), text_color=release_color, anchor="w")
-        release_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        release_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 5)) # columnspan=3
 
         if game.get("tags", []):
             tags_str = ", ".join(game["tags"])
             tags_label = ctk.CTkLabel(master=info_frame, text=tags_str, font=ctk.CTkFont(family="PingFang SC", size=10, slant="italic"), text_color=["#999999", "#777777"], anchor="w", wraplength=450)
-            tags_label.grid(row=2, column=0, columnspan=2, sticky="sw")
+            tags_label.grid(row=2, column=0, columnspan=3, sticky="sw") # columnspan=3
 
     print("[DEBUG] 6. 数据填充完毕。")
 
@@ -615,7 +677,7 @@ def run_scraper_in_thread():
     thread.daemon = True
     thread.start()
 
-# --- 修改：更新 target_function ---
+# --- 目标函数 (已修复 NameError) ---
 def target_function():
     """
     线程的目标函数：
@@ -662,7 +724,7 @@ def target_function():
         if game_name_key not in unique_games:
             unique_games[game_name_key] = game
         else:
-            # ★★★ 修正：修复 NameError ★★★
+            # ★★★ 修正：修复 NameError (game_key_name -> game_name_key) ★★★
             if unique_games[game_name_key]['source'] in ('Google Play', 'QooApp'):
                  unique_games[game_name_key] = game
 
