@@ -1,9 +1,6 @@
 # 最新二游 Pro (全球版) 🚀
 
-一个聚合型的桌面 GUI 应用，用于抓取 Taptap、Bilibili、QooApp 和 Google Play 商店的即将上线/预约的二次元（Gacha）游戏。
-
-![[在此处插入您的应用截图]](https://github.com/user/repo/assets/image.png)
-*(提示: 运行程序后截一张图, 上传到 GitHub issue 中获取链接, 然后替换上面这行)*
+一个聚合型的桌面 GUI 应用，用于抓取 Taptap、Bilibili、QooApp 和 Google Play 商店的即将上线/预约的二游。
 
 ---
 
@@ -61,5 +58,6 @@ python main.py
 程序启动后，点击 "刷新数据" 按钮开始爬取。
 
 ## 📄 许可证
+
 
 本项目采用 [MIT 许可证](LICENSE) 开源。
